@@ -233,6 +233,7 @@ export class MoviesService {
       const baseMovie = await this.getSimilarMovie(query);
 
       if (baseMovie && baseMovie.embedding) {
+        console.log('similar triggerd');
         similarMovieFound = true;
 
         const similarMatches = await this.movieRepository.query(
@@ -244,7 +245,7 @@ export class MoviesService {
             AND id != $2
             AND genres && $3
           ORDER BY embedding <=> $1
-          LIMIT 20
+          LIMIT 50
           `,
           [baseMovie.embedding, baseMovie.id, baseMovie.genres],
         );
@@ -261,6 +262,7 @@ export class MoviesService {
 
       // ⭐ 4️⃣ Top high-rated & popular movies (QUALITY BOOST)
       if (isGenericQuery) {
+        console.log('generic triggerd');
         similarMovieFound = true;
         const topRatedResults = await this.movieRepository.query(
           `
@@ -273,7 +275,7 @@ export class MoviesService {
             WHERE vote_count > 500
             AND vote_average >= 7.5
             ORDER BY quality_score DESC
-            LIMIT 20
+            LIMIT 50
             `,
         );
 
@@ -296,15 +298,24 @@ export class MoviesService {
     // Only if no similar/generic movie search was done
     // If query is short < 3, we want more fuzzy results only
     if (!similarMovieFound) {
-      const limit = query.length < 3 ? 50 : 5; // more results for very short queries
+      console.log('fuzzy triggerd');
+      const limit = query.length < 3 ? 50 : 20; // more results for very short queries
       const fuzzyResults = await this.movieRepository.query(
         `
         SELECT *,
-               word_similarity(lower(title), lower($1)) AS score
-        FROM movies
-        WHERE word_similarity(lower(title), lower($1)) > 0.25
-        ORDER BY score DESC
-        LIMIT $2
+            GREATEST(
+              word_similarity(lower(title), lower($1)),
+              word_similarity(lower(overview), lower($1)),
+              word_similarity(lower(tagline), lower($1))
+            ) AS score
+      FROM movies
+      WHERE GREATEST(
+              word_similarity(lower(title), lower($1)),
+              word_similarity(lower(overview), lower($1)),
+              word_similarity(lower(tagline), lower($1))
+            ) > 0.25
+      ORDER BY score DESC
+      LIMIT $2;
         `,
         [query, limit],
       );
@@ -323,13 +334,14 @@ export class MoviesService {
 
       // Add genre-based results if genres found
       if (foundGenres.length > 0) {
+        console.log('genre triggerd');
         const genreResults = await this.movieRepository.query(
           `
         SELECT *
         FROM movies
         WHERE genres && $1
         ORDER BY popularity DESC
-        LIMIT 20
+        LIMIT 50
         `,
           [foundGenres],
         );
@@ -344,52 +356,44 @@ export class MoviesService {
 
     // 2️⃣ Semantic vector search (ONLY if query is meaningful)
     // Added to every query result set with length >= 3
-    if (query.length >= 3) {
-      const queryVector = await this.embedText(query);
+    // if (query.length >= 3) {
+    //   const queryVector = await this.embedText(query);
 
-      const vectorResults = await this.movieRepository.query(
-        `
-        SELECT *,
-               1 - (embedding <=> $1) AS similarity
-        FROM movies
-        ORDER BY similarity DESC
-        LIMIT 10
-        `,
-        [queryVector],
-      );
+    //   const vectorResults = await this.movieRepository.query(
+    //     `
+    //     SELECT *,
+    //            1 - (embedding <=> $1) AS similarity
+    //     FROM movies
+    //     ORDER BY similarity DESC
+    //     LIMIT 10
+    //     `,
+    //     [queryVector],
+    //   );
 
-      vectorResults.forEach((m: any) => {
-        if (results.has(m.id)) {
-          results.get(m.id).rank += 1.0;
-        } else {
-          results.set(m.id, { ...m, rank: 0.9 });
-        }
-      });
-    }
+    //   vectorResults.forEach((m: any) => {
+    //     if (results.has(m.id)) {
+    //       results.get(m.id).rank += 1.0;
+    //     } else {
+    //       results.set(m.id, { ...m, rank: 0.9 });
+    //     }
+    //   });
+    // }
 
     // 3️⃣ Sort by combined rank + popularity
-    return (
-      Array.from(results.values())
-        .map(({ embedding, ...rest }) => rest) // 👈 removes embedding
-        // .sort(
-        //   (a, b) =>
-        //     b.rank +
-        //     (b.popularity || 0) * 0.01 -
-        //     (a.rank + (a.popularity || 0) * 0.01),
-        // )
-        .sort(
-          (a, b) =>
-            b.rank +
-            (b.popularity || 0) * 0.01 +
-            (b.vote_average || 0) * 0.2 +
-            Math.log((b.vote_count || 1) + 1) * 0.15 -
-            (a.rank +
-              (a.popularity || 0) * 0.01 +
-              (a.vote_average || 0) * 0.2 +
-              Math.log((a.vote_count || 1) + 1) * 0.15),
-        )
-        .slice(0, 54)
-    );
+    return Array.from(results.values())
+      .map(({ embedding, ...rest }) => rest) // 👈 removes embedding
+      .sort(
+        (a, b) =>
+          b.rank +
+          (b.popularity || 0) * 0.01 +
+          (b.vote_average || 0) * 0.2 +
+          Math.log((b.vote_count || 1) + 1) * 0.15 -
+          (a.rank +
+            (a.popularity || 0) * 0.01 +
+            (a.vote_average || 0) * 0.2 +
+            Math.log((a.vote_count || 1) + 1) * 0.15),
+      )
+      .slice(0, 54);
   }
 
   async popularGenreSearch(genres: string[]) {
