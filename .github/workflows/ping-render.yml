@@ -12,4 +12,4 @@ jobs:
     steps:
       - name: Ping Render Endpoint
         run: |
-          curl -s https://netflix-recommandation-system-backend.onrender.com/ || echo "Ping failed"
+          curl -s https://netflix-recommandation-system-backend.onrender.com/movies/trending || echo "Ping failed"
